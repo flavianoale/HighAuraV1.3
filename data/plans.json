@@ -1,0 +1,135 @@
+{
+  "autopilot": {
+    "modes": [
+      {
+        "id": "hard",
+        "name": "Militar",
+        "desc": "Pouca escolha. Próximo passo sempre claro."
+      },
+      {
+        "id": "hybrid",
+        "name": "Híbrido",
+        "desc": "Autopiloto decide 80%, você ajusta 20%."
+      }
+    ],
+    "defaultBlocks": [
+      {
+        "id": "wake",
+        "label": "Acordar + Ritual",
+        "start": "04:00",
+        "durationMin": 25,
+        "type": "ritual",
+        "script": "wake_protocol"
+      },
+      {
+        "id": "prep",
+        "label": "Preparar + Sair",
+        "start": "05:15",
+        "durationMin": 30,
+        "type": "rotina"
+      },
+      {
+        "id": "commute1",
+        "label": "Condução (estudo leve)",
+        "start": "06:00",
+        "durationMin": 90,
+        "type": "estudo",
+        "script": "study_commute"
+      },
+      {
+        "id": "class",
+        "label": "Faculdade",
+        "start": "07:30",
+        "durationMin": 270,
+        "type": "faculdade"
+      },
+      {
+        "id": "commute2",
+        "label": "Condução (revisão)",
+        "start": "12:00",
+        "durationMin": 90,
+        "type": "estudo"
+      },
+      {
+        "id": "lunch",
+        "label": "Almoço",
+        "start": "13:30",
+        "durationMin": 30,
+        "type": "refeicao"
+      },
+      {
+        "id": "work",
+        "label": "Trabalho",
+        "start": "14:00",
+        "durationMin": 240,
+        "type": "trabalho"
+      },
+      {
+        "id": "training",
+        "label": "Treino",
+        "start": "18:00",
+        "durationMin": 60,
+        "type": "treino"
+      },
+      {
+        "id": "prayer",
+        "label": "Oração + Exame",
+        "start": "20:20",
+        "durationMin": 20,
+        "type": "espiritual",
+        "script": "night_shutdown"
+      },
+      {
+        "id": "sleep",
+        "label": "Dormir",
+        "start": "21:00",
+        "durationMin": 0,
+        "type": "sono"
+      }
+    ]
+  },
+  "timer_presets": [
+    {
+      "id": "train",
+      "label": "Treino guiado",
+      "seconds": 2700,
+      "xpPerMin": 6
+    },
+    {
+      "id": "study",
+      "label": "Estudo foco",
+      "seconds": 1500,
+      "xpPerMin": 6
+    },
+    {
+      "id": "breath",
+      "label": "Respiração",
+      "seconds": 300,
+      "xpPerMin": 4
+    },
+    {
+      "id": "anti",
+      "label": "Anti-impulso",
+      "seconds": 120,
+      "xpPerMin": 8
+    },
+    {
+      "id": "mob",
+      "label": "Mobilidade",
+      "seconds": 600,
+      "xpPerMin": 5
+    },
+    {
+      "id": "rest",
+      "label": "Descanso",
+      "seconds": 900,
+      "xpPerMin": 3
+    },
+    {
+      "id": "social",
+      "label": "Social (prática)",
+      "seconds": 600,
+      "xpPerMin": 7
+    }
+  ]
+}

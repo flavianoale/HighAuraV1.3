@@ -1,0 +1,56 @@
+{
+  "protocols": [
+    {
+      "id": "anti_porn",
+      "title": "Protocolo Anti-Pornografia (UI plug)",
+      "steps": [
+        "Remover estímulo imediatamente (modo avião, sair do quarto).",
+        "Timer 2 min respiração nasal lenta.",
+        "Tarefa física curta (20 flexões / caminhada 5 min).",
+        "Registrar gatilho (emocional e situacional).",
+        "Voltar ao bloco do autopiloto."
+      ],
+      "defaultTimerSec": 300,
+      "xpPerMin": 6
+    },
+    {
+      "id": "anti_binge",
+      "title": "Protocolo Anti-Compulsão (UI plug)",
+      "steps": [
+        "Água + 10 min espera.",
+        "Comer refeição planejada simples (proteína + arroz/feijão).",
+        "Sem beliscar por 2 horas.",
+        "Registrar emoção-gatilho.",
+        "Dormir cedo."
+      ],
+      "defaultTimerSec": 600,
+      "xpPerMin": 5
+    },
+    {
+      "id": "cortisol",
+      "title": "Protocolo Cortisol (UI plug)",
+      "steps": [
+        "Sol 10 min pela manhã.",
+        "Cafeína só até 10h.",
+        "Treino resistido 45–60 min.",
+        "Respiração 5 min pós-almoço.",
+        "Telas off 60 min antes de dormir."
+      ],
+      "defaultTimerSec": 420,
+      "xpPerMin": 5
+    },
+    {
+      "id": "social",
+      "title": "Protocolo Social (UI plug)",
+      "steps": [
+        "Postura: ombros abertos, queixo neutro.",
+        "Contato visual 2 segundos, sorriso curto.",
+        "Pergunta simples + escuta.",
+        "Encerramento firme: 'Boa, a gente se fala.'",
+        "Registrar interação."
+      ],
+      "defaultTimerSec": 180,
+      "xpPerMin": 7
+    }
+  ]
+}

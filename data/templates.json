@@ -1,0 +1,9 @@
+{
+  "report_templates": [
+    {
+      "id": "daily_v5",
+      "title": "Relatório diário v5",
+      "body": "DIA {day}/{total}\nDATA {date}\nRANK/LVL {rank}/{lvl}\nXP {xp} | STREAK {streak} | AURA {aura}\n\nPILARES (0-10)\nShape: {shape}\nIntelecto: {intelecto}\nPsico: {psico}\nEspiritual: {espiritual}\n\nROTINA\nPendentes: {pendingCount}\nÚltimo bloco: {lastBlock}\nPróximo bloco: {nextBlock}\n\nRECAÍDAS\nPornografia: {porn}\nAposta: {bet}\nCompulsão: {binge}\n\nNOTAS\n{notes}\n"
+    }
+  ]
+}

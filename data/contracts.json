@@ -1,0 +1,38 @@
+{
+  "AppState_future": {
+    "profile": {
+      "name": "string",
+      "heightCm": "number",
+      "weightKg": "number"
+    },
+    "settings": {
+      "schedule": "object",
+      "strictMode": "object",
+      "sound": "object",
+      "music": "object",
+      "security": "object"
+    },
+    "plan": {
+      "diet": "DietPlan[]",
+      "workouts": "WorkoutPlan[]",
+      "missions": "Mission[]",
+      "content": "Lore[]"
+    },
+    "game": {
+      "rank": "string",
+      "lvl": "number",
+      "xp": "number",
+      "int": "number",
+      "streak": "number",
+      "aura": "number"
+    },
+    "logs": {
+      "days": "DayLog[]",
+      "events": "EventLog[]"
+    },
+    "db": {
+      "encrypted": "boolean",
+      "version": "number"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "chunks": [
+    {
+      "file": "./data/lore_01.json",
+      "count": 1000
+    },
+    {
+      "file": "./data/lore_02.json",
+      "count": 1000
+    },
+    {
+      "file": "./data/lore_03.json",
+      "count": 1000
+    },
+    {
+      "file": "./data/lore_04.json",
+      "count": 1000
+    },
+    {
+      "file": "./data/lore_05.json",
+      "count": 1000
+    },
+    {
+      "file": "./data/lore_06.json",
+      "count": 1000
+    }
+  ]
+}

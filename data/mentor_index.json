@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "chunks": [
+    {
+      "file": "./data/mentor_lines_01.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_02.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_03.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_04.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_05.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_06.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_07.json",
+      "count": 6000
+    },
+    {
+      "file": "./data/mentor_lines_08.json",
+      "count": 6000
+    }
+  ],
+  "scripts": [
+    {
+      "id": "wake_protocol",
+      "title": "Ritual 4:00 (NPC)",
+      "steps": [
+        {
+          "say": "Acordou. Não pensa. Levanta.",
+          "type": "say"
+        },
+        {
+          "say": "Água. Banho. Cama feita. Ordem.",
+          "type": "say"
+        },
+        {
+          "timer": 180,
+          "label": "Respiração 3min",
+          "xppm": 4
+        },
+        {
+          "say": "Hoje você vira a chave. Próximo bloco.",
+          "type": "say"
+        }
+      ]
+    },
+    {
+      "id": "anti_impulse",
+      "title": "Anti-impulso (NPC)",
+      "steps": [
+        {
+          "say": "TRAVA. Agora você manda.",
+          "type": "say"
+        },
+        {
+          "timer": 120,
+          "label": "Anti-impulso 2min",
+          "xppm": 8
+        },
+        {
+          "say": "Escolha difícil = vida fácil. Volta pro plano.",
+          "type": "say"
+        }
+      ]
+    },
+    {
+      "id": "study_commute",
+      "title": "Condução: estudo leve (NPC)",
+      "steps": [
+        {
+          "say": "Você está na condução. Sem rolagem infinita.",
+          "type": "say"
+        },
+        {
+          "timer": 900,
+          "label": "Leitura 15min",
+          "xppm": 6
+        },
+        {
+          "say": "Anota 3 pontos. Repete mentalmente.",
+          "type": "say"
+        }
+      ]
+    },
+    {
+      "id": "night_shutdown",
+      "title": "Desligamento 20:30 (NPC)",
+      "steps": [
+        {
+          "say": "Tela off. Você quer resultado ou dopamina barata?",
+          "type": "say"
+        },
+        {
+          "timer": 300,
+          "label": "Exame de consciência 5min",
+          "xppm": 5
+        },
+        {
+          "say": "Dormir cedo é arma. Amanhã você vence de novo.",
+          "type": "say"
+        }
+      ]
+    }
+  ],
+  "rewards": [
+    "Feito. Próximo bloco.",
+    "Execução. Sem conversa.",
+    "Você acumulou vitória. Continua.",
+    "Disciplina é liberdade.",
+    "Ordem é poder."
+  ],
+  "antiImpulse": [
+    "TRAVA. 10 respirações lentas.",
+    "Impulso é ruído. Corta.",
+    "Sai do estímulo. Água. Volta.",
+    "Decide como homem. Agora.",
+    "Não negocia com o fraco."
+  ]
+}
