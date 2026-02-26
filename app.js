@@ -1,0 +1,1014 @@
+window.__ASCENSAO_APP_OK__ = true;
+
+const $=(s,e=document)=>e.querySelector(s);
+const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+const uid=()=>String(Date.now())+Math.random().toString(16).slice(2);
+function el(tag, attrs={}, children=[]){
+  const n=document.createElement(tag);
+  for(const [k,v] of Object.entries(attrs||{})){
+    if(k==='class') n.className=v;
+    else if(k==='text') n.textContent=v;
+    else if(k==='value') n.value=v;
+    else if(k==='checked') n.checked=!!v;
+    else if(k.startsWith('aria-')) n.setAttribute(k,v);
+    else if(k.startsWith('data-')) n.setAttribute(k,v);
+    else n.setAttribute(k,v);
+  }
+  for(const c of children){ if(c==null) continue; n.appendChild(typeof c==='string'?document.createTextNode(c):c); }
+  return n;
+}
+function showFatal(err){
+  console.error(err);
+  const root=$('#fatalRoot'); if(!root) return;
+  root.innerHTML='';
+  const box=el('div',{class:'fatal'},[
+    el('div',{class:'box'},[
+      el('div',{class:'cardTitle'},[el('div',{text:'FATAL — APP NÃO INICIOU'}), el('div',{class:'small',text:'Build 4'})]),
+      el('div',{class:'small',text:'Copie o texto abaixo e me mande.'}),
+      el('div',{class:'hr'}),
+      (()=>{const ta=el('textarea',{readonly:'true'},[]); ta.value=String(err&& (err.stack||err.message||err) || 'erro'); return ta;})()
+    ])
+  ]);
+  root.appendChild(box);
+}
+// IDB
+const DB_NAME='ascensao_os_build4_db';
+const DB_VER=1;
+function idbOpen(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open(DB_NAME, DB_VER);
+    req.onerror=()=>reject(req.error);
+    req.onupgradeneeded=()=>{
+      const db=req.result;
+      if(!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      if(!db.objectStoreNames.contains('logs')) db.createObjectStore('logs',{keyPath:'id'});
+      if(!db.objectStoreNames.contains('days')) db.createObjectStore('days',{keyPath:'key'});
+      if(!db.objectStoreNames.contains('audio')) db.createObjectStore('audio');
+    };
+    req.onsuccess=()=>resolve(req.result);
+  });
+}
+async function idbGet(store,key){
+  const db=await idbOpen();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,'readonly');
+    const st=tx.objectStore(store);
+    const r=st.get(key);
+    r.onsuccess=()=>resolve(r.result);
+    r.onerror=()=>reject(r.error);
+  });
+}
+async function idbSet(store,key,value){
+  const db=await idbOpen();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,'readwrite');
+    const st=tx.objectStore(store);
+    const r=st.put(value,key);
+    r.onsuccess=()=>resolve(true);
+    r.onerror=()=>reject(r.error);
+  });
+}
+async function idbPutLog(entry){
+  const db=await idbOpen();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction('logs','readwrite');
+    const st=tx.objectStore('logs');
+    const r=st.put(entry);
+    r.onsuccess=()=>resolve(true);
+    r.onerror=()=>reject(r.error);
+  });
+}
+async function idbListLogs(limit=400){
+  const db=await idbOpen();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction('logs','readonly');
+    const st=tx.objectStore('logs');
+    const r=st.getAll();
+    r.onsuccess=()=>{
+      const all=r.result||[];
+      all.sort((a,b)=>b.tsStart-a.tsStart);
+      resolve(all.slice(0,limit));
+    };
+    r.onerror=()=>reject(r.error);
+  });
+}
+// localStorage UI
+function loadPersisted(){ try{return JSON.parse(localStorage.getItem('ascensao_ui_build4')||'{}');}catch{return{};} }
+function savePersisted(patch){
+  const prev=loadPersisted();
+  localStorage.setItem('ascensao_ui_build4', JSON.stringify({...prev,...patch}));
+}
+// store
+function createStore(initial,reducer){
+  let state=initial; const subs=new Set();
+  return { getState:()=>state, dispatch:(a)=>{ state=reducer(state,a); subs.forEach(fn=>fn()); }, subscribe:(fn)=>{subs.add(fn); return ()=>subs.delete(fn);} };
+}
+const persisted=loadPersisted();
+let PACKS=null, MENTOR=null, LORE=null, PROTOCOLS=null, CONTRACTS=null;
+let mentorLines=[], loreLoaded=[], loreIndex=null, loreChunkCursor=0;
+// audio
+let audioCtx=null;
+function ensureAudio(){ if(audioCtx) return audioCtx; audioCtx=new (window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
+function blip(freq=520,dur=0.045){
+  const s=store.getState().settings?.sound;
+  if(!s?.enabled) return;
+  try{
+    const ctx=ensureAudio(); const o=ctx.createOscillator(); const g=ctx.createGain();
+    o.type='square'; o.frequency.value=freq; g.gain.value=(s.volume||0.35)*0.08;
+    o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime+dur);
+  }catch{}
+}
+// music
+let musicEl=null;
+async function loadMusicFromDB(){
+  const blob=await idbGet('audio','music');
+  if(blob instanceof Blob){
+    store.dispatch({type:'MUSIC_SET',patch:{hasFile:true}});
+    if(!musicEl){ musicEl=new Audio(); musicEl.loop=true; }
+    musicEl.src=URL.createObjectURL(blob);
+    musicEl.volume=store.getState().settings.music?.volume ?? 0.4;
+  }
+}
+async function importMusicFile(file){
+  if(!file) return;
+  const blob=new Blob([await file.arrayBuffer()],{type:file.type||'audio/mpeg'});
+  await idbSet('audio','music',blob);
+  await loadMusicFromDB();
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Música salva offline.',meta:'music'}});
+}
+async function toggleMusic(){
+  const st=store.getState();
+  if(!st.music.hasFile){ store.dispatch({type:'TOAST_PUSH',toast:{msg:'Importe uma música primeiro.',meta:'music'}}); return; }
+  if(!musicEl){ await loadMusicFromDB(); }
+  if(!st.settings.music?.enabled){ store.dispatch({type:'TOAST_PUSH',toast:{msg:'Ative música nas configs.',meta:'music'}}); return; }
+  try{
+    if(st.music.isPlaying){ musicEl.pause(); store.dispatch({type:'MUSIC_SET',patch:{isPlaying:false}}); }
+    else{ musicEl.volume=st.settings.music?.volume ?? 0.4; await musicEl.play(); store.dispatch({type:'MUSIC_SET',patch:{isPlaying:true}}); }
+  }catch{ store.dispatch({type:'TOAST_PUSH',toast:{msg:'Autoplay bloqueado. Use START no boot.',meta:'music'}}); }
+}
+// defaults
+const DEFAULT_PROFILE={ name:'Flaviano', heightCm:171, weightKg:86, trainingDaysPerWeek:6 };
+const DEFAULT_SETTINGS={ schedule:{ wake:'04:00', lunch:'13:30', sleep:'21:00' },
+  strictMode:{ enabled:false, focusTab:'hoje', message:'Foco total. Sem fuga.' },
+  sound:{ enabled:true, volume:0.35 },
+  autopilot:{ mode:'hard' },
+  dopamine:{ rewardRate:0.35 },
+  music:{ enabled:false, autoplay:false, volume:0.4 }
+};
+const DEFAULT_GAME={ dayIndex:1, totalDays:90, rank:'B', lvl:7, xp:0, int:0, streak:0, aura:50 };
+function todayKey(){ const d=new Date(); return d.toISOString().slice(0,10); }
+function rankFromXP(xp){ if(xp>=20000) return 'S'; if(xp>=12000) return 'A'; if(xp>=6500) return 'B'; if(xp>=2200) return 'C'; return 'D'; }
+function levelFromXP(xp){ return 1 + Math.floor(Math.sqrt(Math.max(0,xp)/120)); }
+function pushToast(state,toast){
+  const q=state.toastQueue.concat({id:uid(),msg:toast.msg||'',meta:toast.meta||'',ttl:toast.ttl??2400}).slice(-4);
+  return {...state,toastQueue:q};
+}
+function reducer(s,a){
+  if(a.type==='SET_TAB'){
+    const strict=s.settings.strictMode?.enabled;
+    const focus=s.settings.strictMode?.focusTab||'hoje';
+    if(strict && a.tab!==focus) return pushToast(s,{msg:`MODO ESTRITO: aba bloqueada (${focus.toUpperCase()}).`,meta:'lock'});
+    savePersisted({currentTab:a.tab});
+    return {...s,currentTab:a.tab};
+  }
+  if(a.type==='OPEN_MODAL') return {...s,modal:{open:true,type:a.modalType,payload:a.payload||null}};
+  if(a.type==='CLOSE_MODAL') return {...s,modal:{open:false,type:'',payload:null}};
+  if(a.type==='OPEN_OVERLAY') return {...s,overlay:{open:true,type:a.overlayType,payload:a.payload||null}};
+  if(a.type==='CLOSE_OVERLAY') return {...s,overlay:{open:false,type:'',payload:null}};
+  if(a.type==='TOAST_PUSH') return pushToast(s,a.toast);
+  if(a.type==='TOAST_POP') return {...s,toastQueue:s.toastQueue.slice(1)};
+  if(a.type==='BOOT_LOG') return {...s,bootLog:s.bootLog.concat(a.line).slice(-260)};
+  if(a.type==='BOOT_PROGRESS') return {...s,bootProgress:clamp(a.value,0,100)};
+  if(a.type==='BOOT_DONE') return {...s,isBooting:false,bootProgress:100};
+  if(a.type==='MENTOR_READY') return {...s,mentor:{...s.mentor,loaded:true,count:a.count,idx:a.idx,current:a.current}};
+  if(a.type==='MENTOR_NEXT') return {...s,mentor:{...s.mentor,idx:a.idx,current:a.current}};
+  if(a.type==='LOGS_SET') return {...s,logsCache:a.logs||[]};
+  if(a.type==='PROFILE_SET') return {...s,profile:{...s.profile,...a.patch}};
+  if(a.type==='SETTINGS_SET') return {...s,settings:{...s.settings,...a.patch}};
+  if(a.type==='GAME_SET') return {...s,game:{...s.game,...a.patch}};
+  if(a.type==='DAY_SET') return {...s,dayState:a.dayState};
+  if(a.type==='MUSIC_SET') return {...s,music:{...s.music,...a.patch}};
+  if(a.type==='SCRIPT_SET') return {...s,scriptRunner:a.runner};
+  if(a.type==='LORE_APPEND') return {...s,loreCount:a.count};
+  return s;
+}
+const Initial={
+  currentTab: persisted.currentTab || 'hoje',
+  modal:{open:false,type:'',payload:null},
+  overlay:{open:false,type:'',payload:null},
+  toastQueue:[],
+  isBooting:true, bootProgress:0, bootLog:[],
+  profile:null, settings:null, game:null, dayState:null,
+  mentor:{ idx:0, current:null, loaded:false, count:0 },
+  logsCache:[],
+  music:{ hasFile:false, isPlaying:false },
+  scriptRunner:{ active:false, scriptId:null, stepIndex:0, lastSay:'' },
+  loreCount:0
+};
+const store=createStore(Initial,reducer);
+// packs chunked
+async function loadMoreLore(n=1){
+  const chunks=loreIndex?.chunks||[];
+  for(let i=0;i<n;i++){
+    const next=chunks[loreChunkCursor];
+    if(!next) break;
+    const part=await fetch(next.file).then(r=>r.json());
+    loreLoaded = loreLoaded.concat(part.lore||[]);
+    loreChunkCursor++;
+  }
+  LORE={lore:loreLoaded};
+  store.dispatch({type:'LORE_APPEND',count:loreLoaded.length});
+}
+async function loadPacksChunked(){
+  const [mentorIndex, loreIdx, templates, plans, protocols, contracts] = await Promise.all([
+    fetch('./data/mentor_index.json').then(r=>r.json()),
+    fetch('./data/lore_index.json').then(r=>r.json()),
+    fetch('./data/templates.json').then(r=>r.json()),
+    fetch('./data/plans.json').then(r=>r.json()),
+    fetch('./data/protocols.json').then(r=>r.json()),
+    fetch('./data/contracts.json').then(r=>r.json()),
+  ]);
+  PACKS={templates,plans};
+  MENTOR=mentorIndex;
+  PROTOCOLS=protocols;
+  CONTRACTS=contracts;
+  loreIndex=loreIdx;
+
+  const chunks=mentorIndex.chunks||[];
+  const pick=chunks[Math.floor(Math.random()*Math.max(1,chunks.length))];
+  const mentorChunk = await fetch(pick.file).then(r=>r.json());
+  mentorLines = mentorChunk.lines || [];
+  const idx=Math.floor(Math.random()*Math.max(1,mentorLines.length));
+  store.dispatch({type:'MENTOR_READY',count:mentorLines.length,idx,current:mentorLines[idx]||null});
+  await loadMoreLore(1);
+}
+function mentorNext(){
+  const st=store.getState();
+  if(!mentorLines.length) return;
+  const idx=(st.mentor.idx+1)%mentorLines.length;
+  store.dispatch({type:'MENTOR_NEXT',idx,current:mentorLines[idx]});
+  blip(740);
+}
+async function mentorSave(){
+  const cur=store.getState().mentor.current; if(!cur) return;
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'mentor',label:cur.tag,seconds:0,payload:{id:cur.id,tone:cur.tone,text:cur.text}});
+  await refreshLogs();
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Mentor salvo no log.',meta:'log'}});
+}
+async function mentorReloadChunk(){
+  const chunks=MENTOR?.chunks||[];
+  const pick=chunks[Math.floor(Math.random()*Math.max(1,chunks.length))];
+  const mentorChunk = await fetch(pick.file).then(r=>r.json());
+  mentorLines = mentorChunk.lines || [];
+  const idx=Math.floor(Math.random()*Math.max(1,mentorLines.length));
+  store.dispatch({type:'MENTOR_READY',count:mentorLines.length,idx,current:mentorLines[idx]||null});
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Chunk mentor trocado.',meta:'mentor'}});
+}
+function defaultDayState(){
+  const blocks=JSON.parse(JSON.stringify(PACKS?.plans?.autopilot?.defaultBlocks||[]));
+  return { key: todayKey(), createdAt:Date.now(), blocks, score:{shape:0,intelecto:0,psico:0,espiritual:0},
+    relapses:{porn:false,bet:false,binge:false}, notes:'', completed:{}, lastBlockLabel:'' };
+}
+function computeNextBlock(day){
+  if(!day?.blocks?.length) return null;
+  for(const b of day.blocks){ if(!day.completed?.[b.id]) return b; }
+  return null;
+}
+function pendingCount(day){
+  if(!day?.blocks?.length) return 0;
+  let n=0; for(const b of day.blocks){ if(!day.completed?.[b.id]) n++; }
+  return n;
+}
+async function ensureDay(){
+  let day=store.getState().dayState;
+  if(day && day.key===todayKey()) return day;
+  const loaded=await idbGet('days', todayKey());
+  if(loaded){ store.dispatch({type:'DAY_SET',dayState:loaded}); return loaded; }
+  day=defaultDayState();
+  await idbSet('days', day.key, day);
+  store.dispatch({type:'DAY_SET',dayState:day});
+  return day;
+}
+async function saveDay(day){ await idbSet('days', day.key, day); store.dispatch({type:'DAY_SET',dayState:day}); }
+async function refreshLogs(){ store.dispatch({type:'LOGS_SET',logs: await idbListLogs(400)}); }
+async function setGamePatch(patch){
+  const g={...store.getState().game,...patch};
+  await idbSet('kv','game',g);
+  store.dispatch({type:'GAME_SET',patch:g});
+}
+async function addXP(amount){
+  const st=store.getState();
+  const xp=(st.game?.xp||0) + amount;
+  const lvl=levelFromXP(xp);
+  const rank=rankFromXP(xp);
+  await setGamePatch({xp,lvl,rank});
+}
+async function addAura(delta){
+  const st=store.getState();
+  const aura=clamp((st.game?.aura??50)+delta,0,100);
+  await setGamePatch({aura});
+}
+function Card(title,right,body,actions){
+  return el('section',{class:'card'},[
+    el('div',{class:'cardTitle'},[el('div',{text:title}), el('div',{class:'small',text:right||''})]),
+    body, actions?el('div',{class:'hr'}):null, actions?el('div',{class:'row'},actions):null
+  ]);
+}
+function kvItem(k,v){ return el('div',{class:'kvItem'},[el('div',{class:'k',text:k}), el('div',{class:'v',text:v})]); }
+function PillStatus(items){
+  return el('div',{class:'pills'},items.map(it=>{
+    const cls=it.state==='ok'?'dot ok':(it.state==='warn'?'dot warn':'dot bad');
+    return el('div',{class:'pill'},[el('span',{class:cls,'aria-label':it.state}), el('span',{text:it.label})]);
+  }));
+}
+function renderHUD(){
+  const st=store.getState(); const hud=$('#hud'); hud.innerHTML='';
+  const cell=(k,v)=>el('div',{class:'hudCell'},[el('div',{class:'k',text:k}), el('div',{class:'v',text:v})]);
+  hud.append(
+    cell('DIA',`${String(st.game.dayIndex).padStart(2,'0')}/${st.game.totalDays}`),
+    cell('RANK / LVL',`${st.game.rank} / ${st.game.lvl}`),
+    cell('XP / AURA',`${st.game.xp} / ${st.game.aura}`)
+  );
+  hud.onclick=()=>{ store.dispatch({type:'OPEN_OVERLAY',overlayType:'HUD'}); blip(620); };
+  hud.onkeydown=(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); hud.click(); } };
+}
+function renderTabs(){
+  const st=store.getState();
+  const tabs=[['hoje','HOJE','[H]'],['missoes','MISSÕES','[M]'],['timer','TIMER','[T]'],['mapa','MAPA','[P]'],['relatorio','RELATÓRIO','[R]'],['config','CONFIG','[C]']];
+  const nav=$('#tabs'); nav.innerHTML='';
+  for(const [id,lb,ic] of tabs){
+    nav.appendChild(el('button',{class:'tabBtn','aria-selected':String(st.currentTab===id),'data-action':'tab','data-tab':id,'aria-label':lb},[
+      el('div',{class:'ic',text:ic}), el('div',{class:'lb',text:lb})
+    ]));
+  }
+}
+function renderMentorBar(){
+  const st=store.getState(); const bar=$('#mentorBar'); bar.innerHTML='';
+  const cur=st.mentor.current;
+  bar.append(
+    el('div',{class:'tag',text:cur?.tag||'mentor'}),
+    el('div',{class:'msg',text:cur?.text||'Carregando mentor...'}),
+    el('button',{'data-action':'mentorPanel','aria-label':'Painel',text:'…'}),
+    el('button',{'data-action':'mentorNext','aria-label':'Próxima',text:'>'}),
+    el('button',{'data-action':'mentorSave','aria-label':'Salvar',text:'+'})
+  );
+}
+// views
+function ViewHoje(){
+  const st=store.getState();
+  const day=st.dayState;
+  const next=computeNextBlock(day);
+  const strict=st.settings.strictMode?.enabled;
+  const blockText = next ? `${next.start} • ${next.label} • ${next.durationMin} min` : `Dia fechado.`;
+  const lockBanner = strict ? el('div',{class:'lockBanner'},[
+    el('div',{text:(st.settings.strictMode?.message||'MODO ESTRITO ATIVO.')}),
+    el('div',{class:'small',text:`Foco: ${(st.settings.strictMode?.focusTab||'hoje').toUpperCase()}`})
+  ]) : null;
+  const score=day?.score||{shape:0,intelecto:0,psico:0,espiritual:0};
+  const pills=PillStatus([
+    {label:'Shape',state: score.shape>=6?'ok':(score.shape>=3?'warn':'bad')},
+    {label:'Intelecto',state: score.intelecto>=6?'ok':(score.intelecto>=3?'warn':'bad')},
+    {label:'Psico',state: score.psico>=6?'ok':(score.psico>=3?'warn':'bad')},
+    {label:'Espiritual',state: score.espiritual>=6?'ok':(score.espiritual>=3?'warn':'bad')},
+  ]);
+  const scriptBtn = next?.script ? el('button',{class:'btn','data-action':'runScript','data-script':next.script,'data-variant':'cyan',text:'RODAR SCRIPT NPC'}) : null;
+  return el('div',{},[
+    lockBanner,
+    Card('PRÓXIMO PASSO','autopiloto', el('div',{},[
+      el('div',{class:'small',text:blockText}),
+      next?.script ? el('div',{class:'small',text:`Script NPC: ${next.script}`}) : null,
+      el('div',{class:'hr'}),
+      el('div',{class:'grid2'},[
+        el('button',{class:'btn','data-action':'startNext','data-variant':'accent',text:'EXECUTAR (TIMER)'}),
+        el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Routine',text:'ROTINA'}),
+        el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Protocols',text:'PROTOCOLOS'}),
+        el('button',{class:'btn','data-action':'markDone',text:'MARCAR FEITO'}),
+        scriptBtn,
+        el('button',{class:'btn','data-action':'antiImpulse',text:'ANTI-IMPULSO'}),
+      ].filter(Boolean))
+    ])),
+    Card('STATUS DOS 4 PILARES','sem mentira', el('div',{},[
+      pills,
+      el('div',{class:'hr'}),
+      el('div',{class:'grid2',style:'margin-top:10px'},[
+        el('button',{class:'btn','data-action':'score','data-pillar':'shape',text:'SCORE SHAPE'}),
+        el('button',{class:'btn','data-action':'score','data-pillar':'intelecto',text:'SCORE INTELECTO'}),
+        el('button',{class:'btn','data-action':'score','data-pillar':'psico',text:'SCORE PSICO'}),
+        el('button',{class:'btn','data-action':'score','data-pillar':'espiritual',text:'SCORE ESPIRITUAL'}),
+      ])
+    ])),
+    Card('NOTAS DO DIA','curtas', el('div',{},[
+      el('textarea',{'aria-label':'DayNotes',placeholder:'Fatos + correção. Sem drama.'},[])
+    ]),[
+      el('button',{class:'btn','data-action':'saveNotes','data-variant':'accent',text:'SALVAR NOTAS'}),
+      el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Logs',text:'LOGS'}),
+    ])
+  ]);
+}
+function ViewMissoes(){
+  const day=store.getState().dayState;
+  return el('div',{},[
+    Card('MISSÕES','mock + log', el('div',{},[
+      el('div',{class:'small',text:'Registra vitória/queda. Scripts e protocolos.'}),
+      el('div',{class:'hr'}),
+      el('div',{class:'grid2'},[
+        el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Quick',text:'AÇÕES RÁPIDAS'}),
+        el('button',{class:'btn','data-action':'relapse','data-variant':'warn',text:'RECAÍDA'}),
+        el('button',{class:'btn','data-action':'win','data-variant':'accent',text:'VITÓRIA (+XP)'}),
+        el('button',{class:'btn','data-action':'runScript','data-script':'anti_impulse','data-variant':'cyan',text:'SCRIPT ANTI'}),
+        el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Library',text:'BIBLIOTECA'}),
+      ]),
+      el('div',{class:'hr'}),
+      el('div',{class:'small',text:`Recaídas hoje: porn=${day?.relapses?.porn?'sim':'não'} • aposta=${day?.relapses?.bet?'sim':'não'} • compulsão=${day?.relapses?.binge?'sim':'não'}`})
+    ]))
+  ]);
+}
+function ViewTimer(){
+  const presets=PACKS?.plans?.timer_presets||[];
+  const grid=el('div',{class:'grid2'}, presets.map(p=> el('button',{class:'btn','data-action':'timerOpen','data-label':p.label,'data-seconds':String(p.seconds),'data-xppm':String(p.xpPerMin||6),text:p.label}) ));
+  return el('div',{},[ Card('TIMER','log + xp', el('div',{},[ el('div',{class:'hr'}), grid ])) ]);
+}
+function ViewMapa(){
+  const st=store.getState();
+  const xp=st.game.xp;
+  const pct=clamp(Math.floor(((Math.max(0,xp) % 1400)/1400)*100),0,100);
+  return el('div',{},[
+    Card('PROGRESSÃO','mérito', el('div',{},[
+      el('div',{class:'kv'},[
+        kvItem('XP',String(xp)),
+        kvItem('LVL',String(st.game.lvl)),
+        kvItem('RANK',st.game.rank),
+        kvItem('AURA',String(st.game.aura)),
+      ]),
+      el('div',{class:'hr'}),
+      el('div',{class:'small',text:`Próximo nível: ${pct}%`}),
+      el('div',{class:'progress',style:'margin-top:8px'},[el('div',{style:`width:${pct}%`})])
+    ]),[
+      el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Logs',text:'VER LOGS'}),
+      el('button',{class:'btn','data-action':'toggleMusic',text:'MÚSICA'}),
+      el('button',{class:'btn','data-action':'mentorPanel',text:'MENTOR'}),
+      el('button',{class:'btn','data-action':'openOverlay','data-overlay':'Contracts',text:'CONTRATOS'}),
+    ])
+  ]);
+}
+function buildDailyReport(){
+  const st=store.getState();
+  const tpl=(PACKS?.templates?.report_templates||[]).find(x=>x.id==='daily_v5')?.body || `DIA {day}\nXP {xp}\n`;
+  const day=st.dayState||{};
+  const score=day.score||{};
+  const rel=day.relapses||{};
+  const next=computeNextBlock(day);
+  const fill={
+    day:st.game.dayIndex,total:st.game.totalDays,date:new Date().toLocaleDateString(),
+    rank:st.game.rank,lvl:st.game.lvl,xp:st.game.xp,streak:st.game.streak,aura:st.game.aura,
+    shape:String(score.shape??0),intelecto:String(score.intelecto??0),psico:String(score.psico??0),espiritual:String(score.espiritual??0),
+    porn: rel.porn?'SIM':'NÃO', bet: rel.bet?'SIM':'NÃO', binge: rel.binge?'SIM':'NÃO',
+    pendingCount:String(pendingCount(day)),
+    lastBlock: (day.lastBlockLabel||'(nenhum)'),
+    nextBlock: next?`${next.start} — ${next.label} (${next.durationMin}m)`:'(nenhum)',
+    notes: (day.notes||'(vazio)')
+  };
+  let out=tpl.replace(/\{(\w+)\}/g,(_,k)=> (fill[k]??`{${k}}`));
+  const tail="\n\nLOGS (últimos 20)\n"+(st.logsCache.slice(0,20).map(l=>`- ${new Date(l.tsStart).toLocaleString()} • ${l.kind} • ${l.label} • ${Math.round((l.seconds||0)/60)}m`).join("\n")||"(vazio)");
+  return out+tail;
+}
+function ViewRelatorio(){
+  const ta=el('textarea',{readonly:'true','aria-label':'Relatório'},[]);
+  ta.value=buildDailyReport();
+  return el('div',{},[
+    Card('RELATÓRIO','exportável', el('div',{},[ el('div',{class:'hr'}), ta ]),[
+      el('button',{class:'btn','data-action':'copyReport',text:'COPIAR'}),
+      el('button',{class:'btn','data-action':'downloadTxt',text:'BAIXAR TXT'}),
+      el('button',{class:'btn','data-action':'downloadJson',text:'BAIXAR JSON'}),
+    ])
+  ]);
+}
+function ViewConfig(){
+  const st=store.getState();
+  const s=st.settings;
+  const strict=s.strictMode||{};
+  const music=s.music||{};
+  return el('div',{},[
+    Card('MODO ESTRITO','sem fuga', el('div',{},[
+      el('div',{class:'row',style:'justify-content:space-between'},[
+        el('label',{class:'small',text:'Ativar'}), el('input',{type:'checkbox',checked:!!strict.enabled,'aria-label':'StrictOn'})
+      ]),
+      el('label',{class:'small',text:'Aba foco'}), 
+      el('select',{'aria-label':'StrictFocus'},[
+        el('option',{value:'hoje',text:'HOJE'}), el('option',{value:'missoes',text:'MISSÕES'}), el('option',{value:'timer',text:'TIMER'}),
+        el('option',{value:'mapa',text:'MAPA'}), el('option',{value:'relatorio',text:'RELATÓRIO'}), el('option',{value:'config',text:'CONFIG'}),
+      ]),
+      el('div',{style:'height:10px'}),
+      el('label',{class:'small',text:'Mensagem'}), el('input',{value:strict.message||'Foco total.','aria-label':'StrictMsg'}),
+      el('div',{class:'hr'}),
+      el('button',{class:'btn','data-action':'saveStrict','data-variant':'accent',text:'SALVAR'})
+    ])),
+    Card('MÚSICA','offline', el('div',{},[
+      el('div',{class:'row',style:'justify-content:space-between'},[
+        el('label',{class:'small',text:'Ativar música'}), el('input',{type:'checkbox',checked:!!music.enabled,'aria-label':'MusicOn'})
+      ]),
+      el('div',{class:'row',style:'justify-content:space-between'},[
+        el('label',{class:'small',text:'Autoplay (após START)'}), el('input',{type:'checkbox',checked:!!music.autoplay,'aria-label':'MusicAutoplay'})
+      ]),
+      el('label',{class:'small',text:'Volume música'}), el('input',{type:'range',min:'0',max:'1',step:'0.01',value:String(music.volume??0.4),'aria-label':'MusicVolume'}),
+      el('div',{class:'hr'}),
+      el('div',{class:'row'},[
+        el('input',{type:'file',accept:'audio/*','aria-label':'MusicFile'}),
+        el('button',{class:'btn','data-action':'importMusic',text:'IMPORTAR'}),
+        el('button',{class:'btn','data-action':'toggleMusic',text:'PLAY/STOP'})
+      ])
+    ])),
+    Card('DADOS PESADOS','chunked', el('div',{},[
+      el('div',{class:'small',text:`Mentor chunk: ${mentorLines.length} linhas (arquivo <25MB)`}),
+      el('div',{class:'small',text:`Lore carregado: ${store.getState().loreCount} itens`}),
+      el('div',{class:'hr'}),
+      el('button',{class:'btn','data-action':'loadMoreLore','data-variant':'accent',text:'CARREGAR MAIS LORE'}),
+      el('button',{class:'btn','data-action':'mentorReload',text:'TROCAR CHUNK MENTOR'})
+    ]))
+  ]);
+}
+function renderView(){
+  const st=store.getState(); const view=$('#view'); view.innerHTML='';
+  let node=null;
+  if(st.currentTab==='hoje') node=ViewHoje();
+  if(st.currentTab==='missoes') node=ViewMissoes();
+  if(st.currentTab==='timer') node=ViewTimer();
+  if(st.currentTab==='mapa') node=ViewMapa();
+  if(st.currentTab==='relatorio') node=ViewRelatorio();
+  if(st.currentTab==='config') node=ViewConfig();
+  view.appendChild(node||el('div',{text:'...'}));
+  if(st.currentTab==='hoje'){
+    const ta=view.querySelector('textarea[aria-label="DayNotes"]');
+    if(ta) ta.value=st.dayState?.notes||'';
+  }
+  if(st.currentTab==='config'){
+    const sel=view.querySelector('select[aria-label="StrictFocus"]');
+    if(sel) sel.value=st.settings.strictMode?.focusTab||'hoje';
+  }
+}
+let toastTimer=null;
+function renderToasts(){
+  const st=store.getState(); const root=$('#toastRoot'); root.innerHTML='';
+  if(!st.toastQueue.length) return;
+  const stack=el('div',{class:'toastStack'}, st.toastQueue.map(t=>el('div',{class:'toast'},[
+    el('div',{},[
+      el('div',{class:'msg',text:t.msg}),
+      el('div',{class:'meta',text:t.meta?`• ${t.meta}`:''})
+    ]),
+    el('button',{class:'xbtn','data-action':'toastClose',text:'X','aria-label':'Fechar'})
+  ])));
+  root.appendChild(stack);
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>store.dispatch({type:'TOAST_POP'}), st.toastQueue[0].ttl);
+}
+// modal + overlay + boot minimal
+function renderModal(){
+  const st=store.getState(); const root=$('#modalRoot'); root.innerHTML='';
+  if(!st.modal.open) return;
+  const backdrop=el('div',{class:'backdrop','data-action':'modalClose','aria-label':'Fechar'});
+  const title=st.modal.type==='Timer'?'TIMER':(st.modal.type==='Score'?'SCORE':(st.modal.type==='Relapse'?'RECAÍDA':'MODAL'));
+  const body = st.modal.type==='Timer' ? TimerBody(st.modal.payload) :
+               st.modal.type==='Score' ? ScoreBody(st.modal.payload) :
+               st.modal.type==='Relapse' ? RelapseBody() : el('div',{class:'small',text:'(modal)'});
+  const modal=el('div',{class:'modal',role:'dialog','aria-modal':'true'},[
+    el('div',{class:'modalHeader'},[
+      el('div',{class:'title',text:title}),
+      el('button',{class:'xbtn','data-action':'modalClose',text:'X','aria-label':'Fechar'})
+    ]),
+    el('div',{class:'hr'}), body,
+    el('div',{class:'hr'}),
+    el('div',{class:'row'},[el('button',{class:'btn','data-action':'modalClose',text:'FECHAR'})])
+  ]);
+  root.append(backdrop,modal);
+}
+function renderOverlay(){
+  const st=store.getState(); const root=$('#overlayRoot'); root.innerHTML='';
+  if(!st.overlay.open) return;
+  const type=st.overlay.type;
+  const backdrop=el('div',{class:'backdrop','data-action':'overlayClose','aria-label':'Fechar'});
+  const titleMap={HUD:'HUD',Logs:'LOGS',Routine:'ROTINA',Quick:'AÇÕES',Protocols:'PROTOCOLOS',Library:'BIBLIOTECA',Contracts:'CONTRATOS',Mentor:'MENTOR'};
+  const body = type==='HUD' ? OverlayHUD() :
+               type==='Logs' ? OverlayLogs() :
+               type==='Protocols' ? OverlayProtocols() :
+               type==='Library' ? OverlayLibrary() :
+               type==='Contracts' ? OverlayContracts() :
+               type==='Mentor' ? OverlayMentorPanel() :
+               OverlayHUD();
+  const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':'true'},[
+    el('div',{class:'handle'}),
+    el('div',{class:'sheetHeader'},[
+      el('div',{class:'title',text:titleMap[type]||'PAINEL'}),
+      el('button',{class:'xbtn','data-action':'overlayClose',text:'X','aria-label':'Fechar'})
+    ]),
+    body
+  ]);
+  root.append(backdrop,sheet);
+}
+let bootSim=null;
+function startBoot(){
+  if(bootSim) return;
+  const lines=['[OK] mount /ui','[OK] load packs (chunked)','[OK] init db','[OK] ready'];
+  let i=0;
+  bootSim=setInterval(()=>{
+    const st=store.getState(); if(!st.isBooting){ clearInterval(bootSim); bootSim=null; return; }
+    if(i<lines.length){
+      store.dispatch({type:'BOOT_LOG',line:lines[i]});
+      store.dispatch({type:'BOOT_PROGRESS',value:Math.round(((i+1)/lines.length)*100)});
+      i++;
+    }else{ clearInterval(bootSim); bootSim=null; }
+  },160);
+}
+function renderBoot(){
+  const st=store.getState(); const root=$('#bootRoot'); root.innerHTML='';
+  if(!st.isBooting) return;
+  const log=el('textarea',{class:'bootLog',readonly:'true','aria-label':'Boot log'},[]);
+  log.value=(st.bootLog||[]).join('\n');
+  const bar=el('div',{class:'progress'},[el('div',{style:`width:${st.bootProgress}%`})]);
+  root.appendChild(el('div',{class:'boot'},[
+    el('pre',{class:'ascii',text:'ASCENSÃO OS\nOFFLINE • PRIVADO • MILITAR'}),
+    el('div',{class:'small',text:'START libera áudio e permite autoplay.'}),
+    el('div',{class:'hr'}), log,
+    el('div',{style:'margin-top:12px'},[bar]),
+    el('div',{class:'bootActions'},[
+      el('button',{class:'btn','data-variant':'accent','data-action':'bootStart',text:'START'}),
+      el('button',{class:'btn','data-action':'bootSkip',text:'SKIP'})
+    ])
+  ]));
+}
+function TimerBody(payload){
+  const label=payload?.label||'Timer';
+  const total=Number(payload?.seconds||300);
+  const xppm=Number(payload?.xppm||6);
+  let remaining=total, running=false, startedAt=0, iv=null;
+  const readout=el('div',{style:'font-weight:900;font-size:40px;letter-spacing:.08em',text:'00:00'});
+  const fmt=(sec)=>`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+  const render=()=>readout.textContent=fmt(remaining);
+  const start=()=>{
+    if(running) return;
+    running=true;
+    if(!startedAt) startedAt=Date.now();
+    clearInterval(iv);
+    iv=setInterval(async()=>{
+      remaining=Math.max(0,remaining-1);
+      render();
+      if(remaining===0){
+        clearInterval(iv); iv=null; running=false;
+        await idbPutLog({id:uid(),tsStart:startedAt,tsEnd:Date.now(),kind:'timer',label,seconds:total,payload:{xppm}});
+        await refreshLogs();
+        const xpGain=Math.max(10, Math.round(total/60)*xppm);
+        await addXP(xpGain);
+        await addAura(1);
+        store.dispatch({type:'TOAST_PUSH',toast:{msg:`Concluído. +${xpGain} XP • +1 AURA`,meta:'timer'}});
+        blip(880,0.06);
+      }
+    },1000);
+  };
+  const pause=()=>{ running=false; clearInterval(iv); iv=null; };
+  const reset=()=>{ pause(); remaining=total; startedAt=0; render(); };
+  const box=el('div',{},[
+    el('div',{class:'small',text:label}),
+    readout,
+    el('div',{class:'hr'}),
+    el('div',{class:'row'},[
+      el('button',{class:'btn','data-action':'timerStart','data-variant':'accent',text:'START'}),
+      el('button',{class:'btn','data-action':'timerPause',text:'PAUSE'}),
+      el('button',{class:'btn','data-action':'timerReset',text:'RESET'})
+    ])
+  ]);
+  box.addEventListener('click',(e)=>{
+    const a=e.target.closest('[data-action]'); if(!a) return;
+    if(a.dataset.action==='timerStart') start();
+    if(a.dataset.action==='timerPause') pause();
+    if(a.dataset.action==='timerReset') reset();
+  });
+  const unsub=store.subscribe(()=>{ if(!store.getState().modal.open){ pause(); unsub(); }});
+  render();
+  return box;
+}
+function ScoreBody(payload){
+  const pillar=payload?.pillar||'shape';
+  const st=store.getState();
+  const cur=st.dayState?.score?.[pillar] ?? 0;
+  const inp=el('input',{type:'range',min:'0',max:'10',step:'1',value:String(cur),'aria-label':'ScoreRange'});
+  const out=el('div',{style:'font-weight:900;font-size:34px',text:String(cur)});
+  inp.addEventListener('input',()=> out.textContent=inp.value);
+  return el('div',{},[
+    el('div',{class:'small',text:`Pilar: ${pillar.toUpperCase()}`}),
+    el('div',{class:'hr'}),
+    out, inp,
+    el('div',{class:'hr'}),
+    el('button',{class:'btn','data-action':'saveScore','data-pillar':pillar,'data-variant':'accent',text:'SALVAR SCORE'})
+  ]);
+}
+function RelapseBody(){
+  const st=store.getState();
+  const rel=st.dayState?.relapses||{};
+  const mk=(k,label)=>el('div',{class:'row',style:'justify-content:space-between'},[
+    el('label',{class:'small',text:label}),
+    el('input',{type:'checkbox',checked:!!rel[k],'aria-label':`rel_${k}`,'data-rel':k})
+  ]);
+  return el('div',{},[
+    el('div',{class:'small',text:'Sem mentira. Registra.'}),
+    el('div',{class:'hr'}),
+    mk('porn','Pornografia'),
+    mk('bet','Aposta'),
+    mk('binge','Compulsão'),
+    el('div',{class:'hr'}),
+    el('button',{class:'btn','data-action':'saveRelapse','data-variant':'danger',text:'SALVAR'})
+  ]);
+}
+function OverlayHUD(){
+  const st=store.getState();
+  const day=st.dayState||{};
+  const next=computeNextBlock(day);
+  return el('div',{},[
+    el('div',{class:'kv'},[
+      kvItem('Dia',`${st.game.dayIndex}/${st.game.totalDays}`),
+      kvItem('Rank',st.game.rank),
+      kvItem('Lvl',String(st.game.lvl)),
+      kvItem('XP',String(st.game.xp)),
+      kvItem('Aura',String(st.game.aura)),
+      kvItem('Pendentes',String(pendingCount(day))),
+    ]),
+    el('div',{class:'hr'}),
+    el('div',{class:'small',text:`Próximo: ${next?next.label:'(nenhum)'}`})
+  ]);
+}
+function OverlayLogs(){
+  const st=store.getState();
+  const items=st.logsCache.slice(0,120).map(l=>el('div',{class:'small',text:`• ${new Date(l.tsStart).toLocaleString()} — ${l.kind} — ${l.label}`}));
+  return el('div',{},[...(items.length?items:[el('div',{class:'small',text:'(vazio)'})])]);
+}
+function OverlayProtocols(){
+  const items=(PROTOCOLS?.protocols||[]).map(p=>{
+    return el('div',{class:'card',style:'margin-bottom:10px'},[
+      el('div',{class:'cardTitle'},[el('div',{text:p.title}), el('div',{class:'small',text:`#${p.id}`})]),
+      el('div',{class:'hr'}),
+      ...p.steps.map((s,i)=>el('div',{class:'small',text:`${i+1}) ${s}` })),
+      el('div',{class:'hr'}),
+      el('div',{class:'grid2'},[
+        el('button',{class:'btn','data-action':'protocolRun','data-id':p.id,'data-seconds':String(p.defaultTimerSec||300),'data-xppm':String(p.xpPerMin||6),'data-variant':'accent',text:'EXECUTAR'}),
+        el('button',{class:'btn','data-action':'protocolLog','data-id':p.id,text:'REGISTRAR'})
+      ])
+    ]);
+  });
+  return el('div',{},items);
+}
+function OverlayLibrary(){
+  const st=store.getState();
+  const count=st.loreCount||0;
+  const list=(LORE?.lore||[]).slice(0,220).map(it=>{
+    return el('div',{class:'card',style:'margin-bottom:10px'},[
+      el('div',{class:'cardTitle'},[el('div',{text:it.title}), el('div',{class:'small',text:`#${it.id}`})]),
+      el('div',{class:'small',text:it.summary}),
+    ]);
+  });
+  return el('div',{},[
+    el('div',{class:'small',text:`Lore carregado: ${count} (carrega mais no CONFIG).`}),
+    el('div',{class:'hr'}),
+    ...list
+  ]);
+}
+function OverlayContracts(){
+  const ta=el('textarea',{readonly:'true'},[]);
+  ta.value=JSON.stringify(CONTRACTS,null,2);
+  return el('div',{},[ta]);
+}
+function OverlayMentorPanel(){
+  const st=store.getState();
+  const cur=st.mentor.current;
+  const ta=el('textarea',{readonly:'true'},[]);
+  ta.value = cur ? `[${cur.tag}/${cur.tone}] ${cur.text}` : '(vazio)';
+  const scripts=(MENTOR?.scripts||[]).map(s=>el('button',{class:'btn','data-action':'runScript','data-script':s.id,'data-variant':'cyan',text:s.title}));
+  return el('div',{},[
+    ta,
+    el('div',{class:'hr'}),
+    el('div',{class:'row'},scripts.slice(0,6))
+  ]);
+}
+// script runner
+function getScript(scriptId){ return (MENTOR?.scripts||[]).find(s=>s.id===scriptId) || null; }
+async function runScript(scriptId){
+  const script=getScript(scriptId);
+  if(!script){ store.dispatch({type:'TOAST_PUSH',toast:{msg:'Script não encontrado.',meta:'npc'}}); return; }
+  store.dispatch({type:'OPEN_OVERLAY',overlayType:'Mentor'});
+  store.dispatch({type:'SCRIPT_SET',runner:{active:true,scriptId,stepIndex:0,lastSay:''}});
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:`SCRIPT NPC: ${script.title}`,meta:'npc',ttl:3200}});
+  blip(820,0.05);
+  await scriptNextStep();
+}
+async function scriptNextStep(){
+  const st=store.getState();
+  const r=st.scriptRunner;
+  if(!r.active) return;
+  const script=getScript(r.scriptId);
+  if(!script) return;
+  const step=script.steps[r.stepIndex];
+  if(!step){
+    store.dispatch({type:'SCRIPT_SET',runner:{active:false,scriptId:null,stepIndex:0,lastSay:''}});
+    await addAura(2);
+    store.dispatch({type:'TOAST_PUSH',toast:{msg:'Script concluído. +2 AURA',meta:'npc'}});
+    blip(880,0.05);
+    return;
+  }
+  if(step.say){
+    store.dispatch({type:'SCRIPT_SET',runner:{...r,lastSay:step.say,stepIndex:r.stepIndex+1}});
+    store.dispatch({type:'TOAST_PUSH',toast:{msg:step.say,meta:'mentor',ttl:3200}});
+    blip(660,0.04);
+    return;
+  }
+  if(step.timer){
+    store.dispatch({type:'SCRIPT_SET',runner:{...r,stepIndex:r.stepIndex+1}});
+    store.dispatch({type:'OPEN_MODAL',modalType:'Timer',payload:{label:step.label||'Script Timer',seconds:Number(step.timer||60),xppm:Number(step.xppm||6)}});
+    return;
+  }
+}
+function downloadText(filename, text){
+  const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },0);
+}
+// actions
+async function saveNotes(){
+  const day=await ensureDay();
+  const ta=$('#view textarea[aria-label="DayNotes"]');
+  day.notes=(ta?.value||'').slice(0,3500);
+  await saveDay(day);
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'note',label:'notes',seconds:0,payload:{len:day.notes.length}});
+  await refreshLogs();
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Notas salvas.',meta:'notes'}});
+  blip(660);
+}
+async function startNext(){
+  const day=await ensureDay();
+  const next=computeNextBlock(day);
+  if(!next){ store.dispatch({type:'TOAST_PUSH',toast:{msg:'Dia já fechado.',meta:'day'}}); return; }
+  const secs=Math.max(60, (next.durationMin||1)*60);
+  store.dispatch({type:'OPEN_MODAL',modalType:'Timer',payload:{label:next.label,seconds:secs,xppm:6}});
+  blip(700);
+}
+async function markDone(){
+  const day=await ensureDay();
+  const next=computeNextBlock(day);
+  if(!next){ store.dispatch({type:'TOAST_PUSH',toast:{msg:'Nada pendente.',meta:'day'}}); return; }
+  day.completed[next.id]=true;
+  day.lastBlockLabel=next.label;
+  await saveDay(day);
+  const xpGain=Math.max(8, Math.round((next.durationMin||5)*2));
+  await addXP(xpGain);
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'block',label:next.label,seconds:(next.durationMin||0)*60,payload:{blockId:next.id}});
+  await refreshLogs();
+  await addAura(2);
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:`Bloco feito. +${xpGain} XP • +2 AURA`,meta:'autopiloto'}});
+  blip(880,0.05);
+}
+async function antiImpulse(){
+  const rr=MENTOR?.antiImpulse||[];
+  const msg=rr[Math.floor(Math.random()*Math.max(1,rr.length))] || "Anti-impulso.";
+  store.dispatch({type:'TOAST_PUSH',toast:{msg,meta:'anti-impulso',ttl:3200}});
+  store.dispatch({type:'OPEN_MODAL',modalType:'Timer',payload:{label:'Anti-impulso (2m)',seconds:120,xppm:8}});
+  blip(520);
+}
+async function win(){
+  await addXP(25);
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'win',label:'Vitória',seconds:0,payload:{}});
+  await refreshLogs();
+  await addAura(3);
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Vitória marcada. +25 XP • +3 AURA',meta:'game'}});
+  blip(880,0.05);
+}
+function openScore(pillar){ store.dispatch({type:'OPEN_MODAL',modalType:'Score',payload:{pillar}}); blip(700); }
+async function saveScore(pillar, value){
+  const day=await ensureDay();
+  day.score[pillar]=Number(value||0);
+  await saveDay(day);
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'score',label:pillar,seconds:0,payload:{value:Number(value||0)}});
+  await refreshLogs();
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:`Score salvo: ${pillar.toUpperCase()}=${value}`,meta:'score'}});
+  blip(660);
+}
+async function relapse(){ store.dispatch({type:'OPEN_MODAL',modalType:'Relapse',payload:{}}); blip(520); }
+async function saveRelapseFromModal(modalEl){
+  const day=await ensureDay();
+  const inputs=[...modalEl.querySelectorAll('input[data-rel]')];
+  for(const i of inputs){ day.relapses[i.dataset.rel]=!!i.checked; }
+  await saveDay(day);
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'relapse',label:'relapse',seconds:0,payload:day.relapses});
+  await refreshLogs();
+  const has = (day.relapses.porn||day.relapses.bet||day.relapses.binge);
+  if(has){ await addXP(-45); await addAura(-8); store.dispatch({type:'TOAST_PUSH',toast:{msg:`Registrado. Penalidade -45 XP • -8 AURA`,meta:'disciplina'}}); }
+  else{ await addAura(1); store.dispatch({type:'TOAST_PUSH',toast:{msg:'Registrado (sem recaída). +1 AURA',meta:'disciplina'}}); }
+  blip(330);
+}
+async function protocolRun(id, secs, xppm){
+  store.dispatch({type:'OPEN_MODAL',modalType:'Timer',payload:{label:`Protocolo: ${id}`,seconds:Number(secs||300),xppm:Number(xppm||6)}});
+  blip(740);
+}
+async function protocolLog(id){
+  await idbPutLog({id:uid(),tsStart:Date.now(),tsEnd:Date.now(),kind:'protocol',label:id,seconds:0,payload:{}});
+  await refreshLogs();
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Protocolo registrado.',meta:'log'}});
+  blip(660);
+}
+function copyReport(){
+  const ta=$('#view textarea'); 
+  if(ta && navigator.clipboard) navigator.clipboard.writeText(ta.value||'');
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Copiado.',meta:'report'}});
+}
+function downloadReportTxt(){
+  const ta=$('#view textarea');
+  downloadText('ascensao-relatorio.txt', ta?.value||'');
+}
+function downloadJson(){
+  const st=store.getState();
+  const obj={profile:st.profile,settings:st.settings,game:st.game,day:st.dayState,logs:st.logsCache.slice(0,250)};
+  downloadText('ascensao-export.json', JSON.stringify(obj,null,2));
+}
+async function saveStrict(){
+  const view=$('#view');
+  const on=!!view.querySelector('input[aria-label="StrictOn"]')?.checked;
+  const focus=view.querySelector('select[aria-label="StrictFocus"]')?.value || 'hoje';
+  const msg=view.querySelector('input[aria-label="StrictMsg"]')?.value || 'Foco total.';
+  const st=store.getState();
+  const settings={...st.settings, strictMode:{...st.settings.strictMode, enabled:on, focusTab:focus, message:msg}};
+  await idbSet('kv','settings',settings);
+  store.dispatch({type:'SETTINGS_SET',patch:settings});
+  savePersisted({lockUI:{enabled:on}});
+  store.dispatch({type:'TOAST_PUSH',toast:{msg:'Modo estrito atualizado.',meta:'config'}});
+  blip(660);
+}
+function handleAction(e){
+  const t=e.target.closest('[data-action]'); if(!t) return;
+  const a=t.dataset.action;
+  if(a==='tab'){ store.dispatch({type:'SET_TAB',tab:t.dataset.tab}); blip(520); }
+  if(a==='openOverlay'){ store.dispatch({type:'OPEN_OVERLAY',overlayType:t.dataset.overlay,payload:{}}); blip(700); }
+  if(a==='modalClose'){ store.dispatch({type:'CLOSE_MODAL'}); blip(330); }
+  if(a==='overlayClose'){ store.dispatch({type:'CLOSE_OVERLAY'}); blip(330); }
+  if(a==='toastClose'){ store.dispatch({type:'TOAST_POP'}); }
+  if(a==='mentorPanel'){ store.dispatch({type:'OPEN_OVERLAY',overlayType:'Mentor'}); blip(700); }
+  if(a==='mentorNext'){ mentorNext(); }
+  if(a==='mentorSave'){ mentorSave(); }
+  if(a==='mentorReload'){ mentorReloadChunk(); }
+  if(a==='timerOpen'){ store.dispatch({type:'OPEN_MODAL',modalType:'Timer',payload:{label:t.dataset.label,seconds:Number(t.dataset.seconds||300),xppm:Number(t.dataset.xppm||6)}}); blip(700); }
+  if(a==='startNext'){ startNext(); }
+  if(a==='markDone'){ markDone(); }
+  if(a==='antiImpulse'){ antiImpulse(); }
+  if(a==='win'){ win(); }
+  if(a==='score'){ openScore(t.dataset.pillar); }
+  if(a==='saveScore'){
+    const modal=$('#modalRoot .modal');
+    const v=modal?.querySelector('input[aria-label="ScoreRange"]')?.value||'0';
+    saveScore(t.dataset.pillar, v);
+  }
+  if(a==='relapse'){ relapse(); }
+  if(a==='saveRelapse'){ saveRelapseFromModal($('#modalRoot .modal')); }
+  if(a==='saveNotes'){ saveNotes(); }
+  if(a==='protocolRun'){ protocolRun(t.dataset.id, t.dataset.seconds, t.dataset.xppm); }
+  if(a==='protocolLog'){ protocolLog(t.dataset.id); }
+  if(a==='copyReport'){ copyReport(); }
+  if(a==='downloadTxt'){ downloadReportTxt(); }
+  if(a==='downloadJson'){ downloadJson(); }
+  if(a==='importMusic'){ const file=$('#view input[aria-label="MusicFile"]')?.files?.[0]; importMusicFile(file); }
+  if(a==='toggleMusic'){ toggleMusic(); }
+  if(a==='loadMoreLore'){ loadMoreLore(1).then(()=>store.dispatch({type:'TOAST_PUSH',toast:{msg:'Lore carregado.',meta:'lore'}})); }
+  if(a==='runScript'){ runScript(t.dataset.script); }
+  if(a==='saveStrict'){ saveStrict(); }
+  if(a==='bootStart'){ try{const ctx=ensureAudio(); if(ctx.state==='suspended') ctx.resume();}catch{} store.dispatch({type:'BOOT_DONE'}); blip(880,0.05); const st=store.getState(); if(st.settings.music?.enabled && st.settings.music?.autoplay){ toggleMusic(); } }
+  if(a==='bootSkip'){ store.dispatch({type:'BOOT_DONE'}); }
+}
+function renderAll(){ renderHUD(); renderTabs(); renderMentorBar(); renderView(); renderModal(); renderOverlay(); renderToasts(); renderBoot(); }
+store.subscribe(renderAll);
+async function init(){
+  try{
+    if('serviceWorker' in navigator){ try{ await navigator.serviceWorker.register('./sw.js'); }catch{} }
+    const profile=(await idbGet('kv','profile')) || DEFAULT_PROFILE;
+    const settings=(await idbGet('kv','settings')) || DEFAULT_SETTINGS;
+    const game=(await idbGet('kv','game')) || DEFAULT_GAME;
+    store.dispatch({type:'PROFILE_SET',patch:profile});
+    store.dispatch({type:'SETTINGS_SET',patch:settings});
+    store.dispatch({type:'GAME_SET',patch:game});
+    await loadPacksChunked();
+    await ensureDay();
+    await refreshLogs();
+    await loadMusicFromDB();
+    startBoot();
+    renderAll();
+    for(const id of ['view','tabs','hud','modalRoot','overlayRoot','toastRoot','bootRoot','mentorBar','fatalRoot']){
+      const n=$('#'+id); if(n) n.addEventListener('click', handleAction);
+    }
+    window.addEventListener('keydown',(e)=>{
+      if(e.key==='Escape'){
+        if(store.getState().modal.open) store.dispatch({type:'CLOSE_MODAL'});
+        else if(store.getState().overlay.open) store.dispatch({type:'CLOSE_OVERLAY'});
+      }
+    });
+    store.subscribe(()=>{
+      const st=store.getState();
+      if(!st.modal.open && st.scriptRunner.active){ setTimeout(()=>scriptNextStep(), 180); }
+    });
+  }catch(err){ showFatal(err); }
+}
+init();

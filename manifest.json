@@ -1,0 +1,11 @@
+{
+  "name": "ASCENSÃO OS — Test Build 4 (Chunked)",
+  "short_name": "ASCENSÃO",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0f0a",
+  "theme_color": "#0b0f0a",
+  "description": "PWA offline-first privado com dados chunked (<25MB por arquivo).",
+  "orientation": "portrait-primary"
+}
